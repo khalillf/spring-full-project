@@ -1,44 +1,61 @@
 package com.devoir.microservicecommandes.controllers;
 
+import com.devoir.microservicecommandes.config.ApplicationPropertiesConfiguration;
+import com.devoir.microservicecommandes.exceptions.CommandeNotFoundException;
 import com.devoir.microservicecommandes.models.Commande;
 import com.devoir.microservicecommandes.repositories.CommandeRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.actuate.health.Health;
+import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
 @RestController
+@RefreshScope
 @RequestMapping("/commandes")
-public class CommandeController {
+@CrossOrigin(origins = "http://localhost:3000")
+public class CommandeController implements HealthIndicator {
 
     private static final Logger logger = LoggerFactory.getLogger(CommandeController.class);
 
-    private final CommandeRepository commandeRepository;
+    @Autowired
+    private CommandeRepository commandeRepository;
 
-    @Value("${mes-config-ms.commandes-last:2}") // Default value of 30 if property is not found
-    private int commandesLast;
-
-    public CommandeController(CommandeRepository commandeRepository) {
-        this.commandeRepository = commandeRepository;
-        logger.info("Commandes last: {}", commandesLast);
-    }
+    @Autowired
+    private ApplicationPropertiesConfiguration appProperties;
 
     @GetMapping
     public List<Commande> getLastCommandes() {
-        Date date = new Date(System.currentTimeMillis() - commandesLast * 24 * 60 * 60 * 1000L);
-        return commandeRepository.findByDateAfter(date);
+        logger.info("********* CommandeController getLastCommandes() ");
+        Date date = new Date(System.currentTimeMillis() - appProperties.getCommandesLast() * 24 * 60 * 60 * 1000L);
+        List<Commande> commandes = commandeRepository.findByDateAfter(date);
+
+        if (commandes.isEmpty()) {
+            throw new CommandeNotFoundException("Aucune commande n'est disponible");
+        }
+
+        List<Commande> listeLimitee = commandes.subList(0, Math.min(appProperties.getCommandesLast(), commandes.size()));
+        return listeLimitee;
     }
 
     @GetMapping("/{id}")
-    public Optional<Commande> getCommandeById(@PathVariable long id){
-        return commandeRepository.findById(id);
+    public Optional<Commande> getCommandeById(@PathVariable long id) {
+        logger.info("********* CommandeController getCommandeById(@PathVariable long id) ");
+        Optional<Commande> commande = commandeRepository.findById(id);
+
+        if (commande.isEmpty()) {
+            throw new CommandeNotFoundException("La commande correspondant à l'id " + id + " n'existe pas");
+        }
+
+        return commande;
     }
+
     @PostMapping
     public Commande createCommande(@RequestBody Commande commande) {
         commande.setDate(new Date());
@@ -57,5 +74,16 @@ public class CommandeController {
     @DeleteMapping("/{id}")
     public void deleteCommande(@PathVariable Long id) {
         commandeRepository.deleteById(id);
+    }
+
+    @Override
+    public Health health() {
+        logger.info("****** Actuator : CommandeController health() ");
+        long count = commandeRepository.count();
+        if (count > 0) {
+            return Health.up().withDetail("message", "Il y a des commandes dans la base de données").build();
+        } else {
+            return Health.down().withDetail("message", "Aucune commande dans la base de données").build();
+        }
     }
 }
